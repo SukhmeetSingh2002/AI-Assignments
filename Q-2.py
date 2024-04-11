@@ -1,315 +1,292 @@
-from copy import deepcopy
-import random
+# search
 
-xlim, ylim = 3,3  # board dimensions
+import heapq
+from queue import Queue
 
 
-class GameState:
-    """
-    Attributes
-    ----------
-    _board: list(list)
-        Represent the board with a 2d array _board[x][y]
-        where open spaces are 0 and closed spaces are 1
+infinity = float('inf')
 
-    _parity: bool
-        Keep track of active player initiative (which
-        player has control to move) where 0 indicates that
-        player one has initiative and 1 indicates player 2
 
-    _player_locations: list(tuple)
-        Keep track of the current location of each player
-        on the board where position is encoded by the
-        board indices of their last move, e.g., [(0, 0), (1, 0)]
-        means player 1 is at (0, 0) and player 2 is at (1, 0)
-    """
+def is_number(x):
+    """Is x a number?"""
+    return hasattr(x, '__int__')
 
-    def __init__(self, x_dimension=3, y_dimension=3):
-        global xlim, ylim
-        xlim, ylim = x_dimension, y_dimension
-        self._board = [[0] * ylim for _ in range(xlim)]
-        self._board[-1][-1] = 1  # block lower-right corner
-        # self._board[-1][-2] = 1  # block lower-right corner
-        self._parity = 0
-        self._player_locations = [None, None]
 
-        # set intial postions for players  make sure that both players start from opposite sides
-        # check which postiotni are empty in 1st row and last row
-        _empty_spaces_top = [(0, y)
-                             for y in range(ylim) if self._board[0][y] == 0]
-        _empty_spaces_bottom = [(xlim - 1, y)
-                                for y in range(ylim) if self._board[xlim - 1][y] == 0]
+def name(obj):
+    """Try to find some reasonable name for the object."""
+    return (getattr(obj, 'name', 0) or getattr(obj, '__name__', 0) or
+            getattr(getattr(obj, '__class__', 0), '__name__', 0) or
+            str(obj))
 
-        # set player 1 and player 2 at random positions in the top and bottom row respectively
-        _player1_location = random.choice(_empty_spaces_top)
-        _player2_location = random.choice(_empty_spaces_bottom)
 
-        self._player_locations[0] = _player1_location
-        self._player_locations[1] = _player2_location
+def print_table(table, header=None, sep='   ', numfmt='{}'):
+    """Print a list of lists as a table, so that columns line up nicely.
+    header, if specified, will be printed as the first row.
+    numfmt is the format for all numbers,
+    sep represents the separator between columns."""
+    justs = ['rjust' if is_number(x) else 'ljust' for x in table[0]]
 
-        # update board with player locations
-        # self._board[_player1_location[0]][_player1_location[1]] = 2
-        # self._board[_player2_location[0]][_player2_location[1]] = 3
+    if header:
+        table.insert(0, header)
 
-        # TODO: temprarily set player 1 and player 2 at fixed positions
-        self._board[0][ylim-1] = 2
-        self._board[xlim-1][0] = 3
+    table = [[numfmt.format(x) if is_number(x) else x for x in row]
+             for row in table]
 
-        self._player_locations[0] = (0, ylim-1)
-        self._player_locations[1] = (xlim-1, 0)
+    sizes = list(
+        map(lambda seq: max(map(len, seq)),
+            list(zip(*[map(str, row) for row in table]))))
 
-    def forecast_move(self, move, print_parities=False):
-        """ Return a new board object with the specified move
-        applied to the current game state.
+    for row in table:
+        print(sep.join(getattr(
+            str(x), j)(size) for (j, size, x) in zip(justs, sizes, row)))
 
-        Parameters
-        ----------
-        move: tuple
-            The target position for the active player's next move
-        """
-        if print_parities:
-            print(">>> Parity before: ", self._parity)
 
-        if move not in self.get_legal_moves():
-            raise RuntimeError("Attempted forecast of illegal move")
-        newBoard = deepcopy(self)
-        newBoard._board[move[0]][move[1]] = self._parity + \
-            2  # Assign symbol for the current player
-        newBoard._player_locations[self._parity] = move
-        newBoard._parity ^= 1
+def memoize(fn, slot=None, maxsize=32):
+    """Memoize fn: make it remember the computed value for any argument list.
+    If slot is specified, store result in that slot of first argument.
+    If slot is false, use lru_cache for caching the values."""
+    if slot:
+        def memoized_fn(obj, *args):
+            if hasattr(obj, slot):
+                return getattr(obj, slot)
+            else:
+                val = fn(obj, *args)
+                setattr(obj, slot, val)
+                return val
+    else:
+        @functools.lru_cache(maxsize=maxsize)
+        def memoized_fn(*args):
+            return fn(*args)
 
-        if print_parities:
-            print(">>> Parity after: ", newBoard._parity)
-        return newBoard
+    return memoized_fn
 
-    def __str__(self):
-        # Custom string representation for the game board
-        board_repr = []
-        for row in self._board:
-            row_str = ""
-            for cell in row:
-                if cell == 0:
-                    row_str += "O "
-                elif cell == 1:
-                    row_str += "1 "
-                elif cell == 2:
-                    row_str += "2 "
-                else:
-                    row_str += "X "
-            board_repr.append(row_str)
-        return "\n".join(board_repr)
 
-    def get_legal_moves(self):
-        """ Return a list of all legal moves available to the
-        active player.  Each player should get a list of all
-        empty spaces on the board on their first move, and
-        otherwise they should get a list of all open spaces
-        in a straight line along any row, column or diagonal
-        from their current position. (Players CANNOT move
-        through obstacles or blocked squares.)
-        """
-        loc = self._player_locations[self._parity]
-        if not loc:
-            return self._get_blank_spaces()
-        moves = []
-        rays = [(1, 0), (1, -1), (0, -1), (-1, -1),
-                (-1, 0), (-1, 1), (0, 1), (1, 1)]
-        for dx, dy in rays:
-            _x, _y = loc
-            if 0 <= _x + dx < xlim and 0 <= _y + dy < ylim:
-                _x, _y = _x + dx, _y + dy
-                if self._board[_x][_y]:
-                    continue
-                moves.append((_x, _y))
-        return moves
+class PriorityQueue:
+    """A Queue in which the minimum (or maximum) element (as determined by f and
+    order) is returned first.
+    If order is 'min', the item with minimum f(x) is
+    returned first; if order is 'max', then it is the item with maximum f(x)."""
 
-    def _get_blank_spaces(self):
-        """ Return a list of blank spaces on the board."""
-        return [(x, y) for y in range(ylim) for x in range(xlim)
-                if self._board[x][y] == 0]
+    def __init__(self, order='min', f=lambda x: x):
+        self.heap = []
 
-    def get_winner(self):
-        """0: draw, 1: player 1 wins, 2: player 2 wins, None if game is not over.
-        First one to reach the opposite side wins
-        Player 1 wins if he reaches the bottom row
-        Player 2 wins if he reaches the top row
-        """
-        if self._player_locations[0][0] == xlim - 1:
-            return 1
-        elif self._player_locations[1][0] == 0:
-            return 2
+        if order == 'min':
+            self.f = f
+        elif order == 'max':  # now item with max f(x)
+            self.f = lambda x: -f(x)  # will be popped first
         else:
-            return 0
+            raise ValueError("order must be either 'min' or max'.")
+
+    def append(self, item):
+        """Insert item at its correct position."""
+        heapq.heappush(self.heap, (self.f(item), item))
+
+    def extend(self, items):
+        """Insert each item in items at its correct position."""
+        for item in items:
+            self.heap.append(item)
+
+    def pop(self):
+        """Pop and return the item (with min or max f(x) value
+        depending on the order."""
+        if self.heap:
+            return heapq.heappop(self.heap)[1]
+        else:
+            raise Exception('Trying to pop from empty PriorityQueue.')
+
+    def __len__(self):
+        """Return current capacity of PriorityQueue."""
+        return len(self.heap)
+
+    def __contains__(self, item):
+        """Return True if item in PriorityQueue."""
+        return (self.f(item), item) in self.heap
+
+    def __getitem__(self, key):
+        for _, item in self.heap:
+            if item == key:
+                return item
+
+    def __delitem__(self, key):
+        """Delete the first occurrence of key."""
+        self.heap.remove((self.f(key), key))
+        heapq.heapify(self.heap)
 
 
-def terminal_test(gameState):
-    """ Return True if the game is over for the active player
-    and False otherwise.
-    """
-    return not bool(gameState.get_legal_moves())
+class Problem(object):
+
+    """The abstract class for a formal problem."""
+
+    def __init__(self, initial, goal):
+        """The constructor specifies the initial state, and possibly a goal
+        state, if there is a unique goal."""
+        self.initial = initial
+        self.goal = goal
+
+    def actions(self, state):
+        """Return the actions that can be executed in the given
+        state."""
+        raise NotImplementedError
+
+    def result(self, state, action):
+        """Return the state that results from executing the given
+        action in the given state."""
+        raise NotImplementedError
+
+    def goal_test(self, state):
+        """Return True if the state is a goal."""
+        if isinstance(self.goal, list):
+            return is_in(state, self.goal)
+        else:
+            return state == self.goal
+
+    def path_cost(self, c, state1, action, state2):
+        """Return the cost of a solution path that arrives at state2 from
+           state1 via action, assuming cost c to get up to state1. If the problem
+           is such that the path doesn't matter, this function will only look at
+           state2. If the path does matter, it will consider c and maybe state1
+           and action. The default method costs 1 for every step in the path."""
+        return c + 1
 
 
-def min_value(gameState, alpha=float("-inf"), beta=float("inf"), print_value=False):
-    """ Return the value for a win (+1) if the game is over,
-    otherwise return the minimum value over all legal child
-    nodes.
-    """
+class Node:
 
-    if gameState.get_winner() == 1:
-        return 10
-    elif gameState.get_winner() == 2:
-        return -10
-    elif terminal_test(gameState):
-        return -10
+    """A node in a search tree. Contains a pointer to the parent (the node
+    that this is a successor of) and to the actual state for this node. If a state
+     is arrived at by two paths, then there are two nodes with
+    the same state.  Also includes the action that got us to this state, and
+    the total path_cost (also known as g) to reach the node."""
 
-    v = float("inf")
-    for m in gameState.get_legal_moves():
-        v = min(v, max_value(gameState.forecast_move(m), alpha, beta))
-        beta = min(beta, v)
-        if alpha >= beta:
-            break
+    def __init__(self, state, parent=None, action=None, path_cost=0):
+        """Create a search tree Node, derived from a parent by an action."""
+        self.state = state
+        self.parent = parent
+        self.action = action
+        self.path_cost = path_cost
+        self.depth = 0
+        if parent:
+            self.depth = parent.depth + 1
 
-    if print_value:
-        print(">>> Min value: ", v)
+    def __repr__(self):
+        return "<Node {}>".format(self.state)
 
-    return v
+    def __lt__(self, node):
+        return self.state < node.state
 
+    def expand(self, problem):
+        """List the nodes reachable in one step from this node."""
+        return [self.child_node(problem, action)
+                for action in problem.actions(self.state)]
 
-def max_value(gameState, alpha=float("-inf"), beta=float("inf")):
-    """ Return the value for a loss (-1) if the game is over,
-    otherwise return the maximum value over all legal child
-    nodes.
-    """
+    def child_node(self, problem, action):
+        "Creates and returns a new node based on action result. "
+        next_node = problem.result(self.state, action)
+        return Node(next_node, self, action,
+                    problem.path_cost(self.path_cost, self.state,
+                                      action, next_node))
 
-    if gameState.get_winner() == 1:
-        return 10
-    elif gameState.get_winner() == 2:
-        return -10
-    elif terminal_test(gameState):
-        return -10
+    def solution(self):
+        """Return the sequence of actions to go from the root to this node."""
+        return [node.action for node in self.path()[1:]]
 
-    v = float("-inf")
-    for m in gameState.get_legal_moves():
-        v = max(v, min_value(gameState.forecast_move(m), alpha, beta))
-        alpha = max(alpha, v)
-        if alpha >= beta:
-            break
+    def path(self):
+        """Return a list of nodes forming the path from the root to this node."""
+        node, path_back = self, []
+        while node:
+            path_back.append(node)
+            node = node.parent
+        return list(reversed(path_back))
 
-    return v
+    def __eq__(self, other):
+        return isinstance(other, Node) and self.state == other.state
 
-
-def minimax_decision(gameState):
-    """ Return the move along a branch of the game tree that
-    has the best possible value.  A move is a pair of coordinates
-    in (column, row) order corresponding to a legal move for
-    the searching player.
-
-    You can ignore the special case of calling this function
-    from a terminal state.
-    """
-
-    # alpha beta pruning
-    alpha = float("-inf")
-    beta = float("inf")
-
-    return max(gameState.get_legal_moves(), key=lambda m: min_value(gameState.forecast_move(m) , alpha, beta))
-    x= max(gameState.get_legal_moves(), key=lambda m: min_value(gameState.forecast_move(m) , alpha, beta, print_value=True))
-    print(">>> Minimax decision: ", x)
-    return x
-
-# Implement your AI's move logic here
-
-
-def ai_move_logic(gameState):
-    # Implement your AI's move logic
-    # For demonstration, return the first legal move
-    # return gameState.get_legal_moves()[0]
-
-    # alpha beta pruning
-    alpha = float("-inf")
-    beta = float("inf")
-
-    return min(gameState.get_legal_moves(), key=lambda m: max_value(gameState.forecast_move(m) , alpha, beta))
-
-
-# Initialize the game board
-initial_board = GameState(x_dimension=4, y_dimension=4)
-
-# Define symbols for visualization
-symbols = {
-    0: "O",    # Empty space
-    1: "X",    # Blocked space
-    2: "1",    # Player 1
-    3: "2",    # AI Player (Player 2)
-}
-
-print("Initial positions of players: ", initial_board._player_locations)
-print("Initial game board: ")
-for row in initial_board._board:
-    print(" ".join(symbols[cell] for cell in row))
-
-
-# Main game loop
-first_player_moves_left = True
-second_player_moves_left = True
-
-while True:
-
-    if not first_player_moves_left and not second_player_moves_left:
-        break
-
-    if terminal_test(initial_board):
-        initial_board._parity ^= 1
-        first_player_moves_left = False
-    else:
-        player_move = minimax_decision(initial_board)
-        initial_board = initial_board.forecast_move(
-            player_move, print_parities=False)
-
-        print("Current game board: (After Player 1's move)")
-        for row in initial_board._board:
-            print(" ".join(symbols[cell] for cell in row))
-
-    if initial_board.get_winner() == 1:
-        print("Player 1 wins!")
-        break
-    elif initial_board.get_winner() == 2:
-        print("Player 2 wins!")
-        break
-
-    # Player 2's turn
-
-    if terminal_test(initial_board):
-        second_player_moves_left = False
-        initial_board._parity ^= 1
-    else:
-
-        ai_move = ai_move_logic(initial_board)
-        initial_board = initial_board.forecast_move(ai_move, print_parities=False)
-
-        print("Current game board: (After Player 2's move)")
-        for row in initial_board._board:
-            print(" ".join(symbols[cell] for cell in row))
-
-
-    if initial_board.get_winner() == 1:
-        print("Player 1 wins!")
-        break
-    elif initial_board.get_winner() == 2:
-        print("Player 2 wins!")
-        break
-
-print("=====================================", end="\n\n")
-print("Final game board:")
-for row in initial_board._board:
-    print(" ".join(symbols[cell] for cell in row))
-
-print("Game over!")
+    def __hash__(self):
+        return hash(self.state)
 
 
 
-# Player 2 wins!
-# O O 1 O
-# O O O O
-# O O O O
-# 2 O O X
+def best_first_graph_search(problem, f,cost_limit=None):
+    """Search the nodes with the lowest f scores first.
+    You specify the function f(node) that you want to minimize; for example,
+    if f is a heuristic estimate to the goal, then we have greedy best
+    first search; if f is node.depth then we have breadth-first search.
+    There is a subtlety: the line "f = memoize(f, 'f')" means that the f
+    values will be cached on the nodes as they are computed. So after doing
+    a best first search you can examine the f values of the path returned."""
+    f = memoize(f, 'f')
+    node = Node(problem.initial)
+    if problem.goal_test(node.state):
+        return node
+    frontier = PriorityQueue('min', f)
+    frontier.append(node)
+    explored = set()
+
+    while frontier:
+
+        node = frontier.pop()
+        if problem.goal_test(node.state):
+            return node
+        explored.add(node.state)
+
+        if cost_limit is not None and f(node) > cost_limit:
+            continue
+        
+        for child in node.expand(problem):
+            if child.state not in explored and child not in frontier:
+                frontier.append(child)
+            elif child in frontier:
+                incumbent = frontier[child]
+                if f(child) < f(incumbent):
+                    del frontier[incumbent]
+                    frontier.append(child)
+
+    return None
+
+
+
+def astar_search(problem, h=None):
+    """A* search is best-first graph search with f(n) = g(n) + h(n)."""
+    h = memoize(h or problem.h, 'h')
+    return best_first_graph_search(problem, lambda n: n.path_cost + h(n))
+
+def uniform_cost_search(problem,h=None):
+    """Uniform Cost Search is best-first graph search with f(n) = g(n)."""
+    h = memoize(h or problem.h, 'h')
+    return best_first_graph_search(problem, lambda n: n.path_cost)
+
+class InstrumentedProblem(Problem):
+
+    """Delegates to a problem, and keeps statistics."""
+
+    def __init__(self, problem):
+        self.problem = problem
+        self.succs = self.goal_tests = self.states = 0
+        self.found = None
+
+    def actions(self, state):
+        self.succs += 1
+        return self.problem.actions(state)
+
+    def result(self, state, action):
+        self.states += 1
+        return self.problem.result(state, action)
+
+    def goal_test(self, state):
+        self.goal_tests += 1
+        result = self.problem.goal_test(state)
+        if result:
+            self.found = state
+        return result
+
+    def path_cost(self, c, state1, action, state2):
+        return self.problem.path_cost(c, state1, action, state2)
+
+    def value(self, state): #nope
+        return self.problem.value(state)
+
+    def __getattr__(self, attr): #nope
+        return getattr(self.problem, attr)
+
+    def __repr__(self): #nope
+        return '<{:4d}/{:4d}/{:4d}/{}>'.format(self.succs, self.goal_tests,
+                                               self.states, str(self.found))
